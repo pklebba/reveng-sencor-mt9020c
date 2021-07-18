@@ -1,6 +1,7 @@
 # Summary
 
-- Packet Frame: 112 bits
+- Packet size: 112 bits
+- Packet frames: ?
 - Ordering: dunno, LE??
 - LOW pulse width: ~500us
 - HIGH pulse width (bin 0): ~350us

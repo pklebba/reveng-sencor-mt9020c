@@ -1,15 +1,15 @@
 # Summary
 
-Packet Frame: 112 bits
-Ordering: dunno, LE??
-LOW pulse width: ~500us
-HIGH pulse width (bin 0): ~350us
-HIGH pulse width (bin 1): ~1.17ms
+- Packet Frame: 112 bits
+- Ordering: dunno, LE??
+- LOW pulse width: ~500us
+- HIGH pulse width (bin 0): ~350us
+- HIGH pulse width (bin 1): ~1.17ms
 
 ## Known packets
 
-Turn on 23'C - D4 E3 64 80 00 24 d0 b0 00 00 00 00 00 92
-Turn off 23'C - D4 E3 64 80 00 04 d0 b0 00 00 00 00 00 A2
+- Turn on 23'C - D4 E3 64 80 00 24 d0 b0 00 00 00 00 00 92
+- Turn off 23'C - D4 E3 64 80 00 04 d0 b0 00 00 00 00 00 A2
 
 === 
 

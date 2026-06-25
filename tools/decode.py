@@ -10,9 +10,14 @@ receiver. The modulation is pulse-distance (PDM): a fixed ~500 us LOW mark
 followed by a HIGH space whose length encodes the bit (short = 0, long = 1).
 Bytes are transmitted **LSB-first**.
 
+The signal channel is auto-detected (the line with the most edges), so it
+works regardless of which probe the IR receiver is wired to.
+
 Usage:
-    python3 tools/decode.py [capture.sr]      # default: captures/full-pulseview.sr
-    python3 tools/decode.py --bits capture.sr # also print raw 112-bit frames
+    python3 tools/decode.py [capture.sr]        # default: captures/full-pulseview.sr
+    python3 tools/decode.py --bits capture.sr   # also print raw 112-bit frames
+    python3 tools/decode.py --channel=2 cap.sr  # force a specific channel
+    python3 tools/decode.py --debounce=0 cap.sr # disable the glitch filter
 """
 import sys
 import zipfile
@@ -42,19 +47,32 @@ def read_samplerate(z):
     raise RuntimeError("samplerate not found in metadata")
 
 
-def run_length_encode(z, srate):
-    """Yield (level, duration_us) runs for channel D0 across the whole capture."""
-    try:
-        import numpy as np
-    except ImportError:
-        sys.exit("This script needs numpy:  pip install numpy")
+def _chunk_names(z):
+    return sorted((n for n in z.namelist() if n.startswith("logic-1-")),
+                  key=lambda n: int(n.split("-")[-1]))
 
-    names = sorted((n for n in z.namelist() if n.startswith("logic-1-")),
-                   key=lambda n: int(n.split("-")[-1]))
+
+def detect_channel(z):
+    """Return (channel, transitions[8]): the digital line with the most edges."""
+    import numpy as np
+    trans = np.zeros(8, dtype=np.int64)
+    for name in _chunk_names(z):
+        data = np.frombuffer(z.read(name), dtype=np.uint8)
+        for ch in range(8):
+            trans[ch] += int(np.count_nonzero(np.diff((data >> ch) & 1)))
+    ch = int(trans.argmax())
+    if trans[ch] == 0:
+        raise RuntimeError("no activity on any channel — is the capture empty?")
+    return ch, trans
+
+
+def run_length_encode(z, srate, channel):
+    """Yield (level, duration_us) runs for the given channel across the capture."""
+    import numpy as np
     us_per_sample = 1e6 / srate
     cur_level, cur_len = None, 0
-    for name in names:
-        arr = np.frombuffer(z.read(name), dtype=np.uint8) & 1  # D0 = bit 0
+    for name in _chunk_names(z):
+        arr = (np.frombuffer(z.read(name), dtype=np.uint8) >> channel) & 1
         edges = np.nonzero(np.diff(arr))[0]
         starts = np.concatenate(([0], edges + 1))
         ends = np.concatenate((edges + 1, [len(arr)]))
@@ -67,6 +85,24 @@ def run_length_encode(z, srate):
                 cur_level, cur_len = lv, ln
     if cur_level is not None:
         yield cur_level, cur_len * us_per_sample
+
+
+def debounce(runs, min_us):
+    """Merge runs shorter than min_us into the previous run (glitch filter).
+
+    The shortest legitimate pulse is a ~345 us space, so any threshold up to
+    ~250 us only removes receiver noise. Needed for marginal TSOP captures
+    where carrier ripple injects sub-100 us spikes into marks and spaces.
+    """
+    if min_us <= 0:
+        return list(runs)
+    out = []
+    for lev, dur in runs:
+        if out and (dur < min_us or lev == out[-1][0]):
+            out[-1][1] += dur                 # absorb glitch / merge same level
+        else:
+            out.append([lev, dur])
+    return [(l, d) for l, d in out]
 
 
 def decode_frames(runs):
@@ -131,12 +167,25 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     show_bits = "--bits" in sys.argv
     path = args[0] if args else "captures/full-pulseview.sr"
+    channel = next((int(a.split("=")[1]) for a in sys.argv
+                    if a.startswith("--channel=")), None)
+    deb = next((int(a.split("=")[1]) for a in sys.argv
+                if a.startswith("--debounce=")), 100)   # glitch filter, us
+
+    try:
+        import numpy  # noqa: F401 — fail early with a friendly message
+    except ImportError:
+        sys.exit("This script needs numpy:  pip install numpy")
 
     with zipfile.ZipFile(path) as z:
         srate = read_samplerate(z)
-        frames = decode_frames(run_length_encode(z, srate))
+        if channel is None:
+            channel, _ = detect_channel(z)        # auto-pick the active line
+        runs = debounce(run_length_encode(z, srate, channel), deb)
+        frames = decode_frames(runs)
 
-    print(f"{path}: {srate/1e6:g} MHz, {len(frames)} frames\n")
+    print(f"{path}: {srate/1e6:g} MHz, channel D{channel}, "
+          f"debounce {deb}us, {len(frames)} frames\n")
     ok = 0
     for k, bits in enumerate(frames):
         b = frame_to_bytes(bits)

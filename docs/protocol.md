@@ -137,9 +137,5 @@ captured frames above byte-for-byte.
 ## Remaining unknowns
 
 - **Timer (bytes 9–10):** not exercised in the capture; encoding unverified.
-- **Swing (`byte8 & 0x38`):** always `0x38` when on — whether the three bits
-  carry distinct meaning (e.g. swing range/direction) is untested.
 - **Auto mode / "Quiet" / display-off**, and any other buttons not pressed
   during capture, are undocumented.
-- **Repeat behaviour:** each button press produced one frame here; whether the
-  remote repeats frames when a key is held is not captured.

@@ -101,9 +101,6 @@ small HTTP API (`curl "http://<esp-ip>/ac?mode=cool&temp=22&fan=auto"`).
 ## Remaining unknowns
 
 - **Timer (bytes 9–10):** never exercised in the capture; encoding unverified.
-- **Swing (`byte8 & 0x38`):** always `0x38` when on — whether the three bits
-  encode swing range/direction is untested.
-- **Auto mode** and any other unpressed buttons are undocumented.
 
 See [`docs/protocol.md`](docs/protocol.md#remaining-unknowns) for details.
 

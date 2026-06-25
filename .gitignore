@@ -12,5 +12,7 @@ __pycache__/
 .pio/
 get-platformio.py
 
-# Local secrets (WiFi credentials) — keep secrets.h.example committed
+# Local secrets — keep the *.example files committed
 firmware/src/secrets.h
+firmware/esphome/secrets.yaml
+firmware/esphome/.esphome/

@@ -22,6 +22,9 @@ firmware/
 
 ## Hardware
 
+For the full IR-hub build (ESP32-S3 + MOSFET-driven LEDs + TSOP, with a bill of
+materials and full wiring), see [`HARDWARE.md`](HARDWARE.md). Quick version below.
+
 ### TX — IR LED (required)
 Drive the LED through a transistor; a GPIO pin can't source the current an IR
 LED needs for usable range:

@@ -51,6 +51,9 @@ original analysis live in [`docs/protocol.md`](docs/protocol.md).
 ├── tools/
 │   ├── decode.py          # decodes a .sr capture → frames + checksum check
 │   └── encode.py          # builds a transmittable IR frame from settings
+├── firmware/              # ESP32 IR transmitter + HTTP control (PlatformIO)
+│   ├── platformio.ini
+│   └── src/main.cpp
 └── captures/
     ├── full-pulseview.sr  # raw sigrok logic-analyzer capture (8 MHz, D0)
     ├── full-pulseview.pvs # PulseView session file
@@ -90,6 +93,10 @@ python3 tools/encode.py --mode heat --temp 18 --fan high --swing --unit f
 python3 tools/encode.py --power off
 python3 tools/encode.py --selftest   # verifies output against real captures
 ```
+
+To actually drive the air conditioner, [`firmware/`](firmware/) has an ESP32
+sketch that builds the frame on the MCU and transmits it via an IR LED, with a
+small HTTP API (`curl "http://<esp-ip>/ac?mode=cool&temp=22&fan=auto"`).
 
 ## Remaining unknowns
 

@@ -7,3 +7,10 @@ __pycache__/
 .idea/
 .DS_Store
 *.swp
+
+# PlatformIO
+.pio/
+get-platformio.py
+
+# Local secrets (WiFi credentials) — keep secrets.h.example committed
+firmware/src/secrets.h

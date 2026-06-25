@@ -7,35 +7,39 @@ The goal is to fully decode the IR frame the remote sends so the air
 conditioner can be controlled from a microcontroller / smart-home setup
 (e.g. an ESP with an IR LED) instead of the original remote.
 
-> ⚠️ **Status: work in progress.** Most of the frame is decoded. The
-> checksum byte (Block 8) is *not* fully solved yet — see
-> [Open questions](#open-questions).
+> ✅ **Status: protocol decoded and verified.** All 14 frame bytes are
+> mapped and the checksum is solved — every one of the 69 captured frames
+> validates. See [`docs/protocol.md`](docs/protocol.md). Remaining gaps are
+> only buttons that weren't pressed during capture (timer, auto mode).
 
 ## Protocol at a glance
 
-| Property              | Value                                  |
-| --------------------- | -------------------------------------- |
-| Carrier / modulation  | PDM (pulse-distance modulation)        |
-| Frame length          | 112 bits                               |
-| LOW pulse width        | ~500 µs                                |
-| HIGH pulse, bit `0`   | ~350 µs                                |
-| HIGH pulse, bit `1`   | ~1.17 ms                               |
+| Property             | Value                                   |
+| -------------------- | --------------------------------------- |
+| Modulation           | PDM (pulse-distance modulation)         |
+| Frame length         | 112 bits (14 bytes)                     |
+| Bit order            | **LSB-first**                           |
+| Bit mark (LOW)       | ~500 µs (fixed)                         |
+| Space, bit `0`       | ~345 µs                                 |
+| Space, bit `1`       | ~1.16 ms                                |
+| Checksum             | `sum(bytes 0–12) mod 256`               |
 
-The 112-bit frame is split into 8 logical blocks:
+Frame bytes (LSB-first):
 
-| Block | Bits | Meaning                                         |
-| ----- | ---- | ----------------------------------------------- |
-| 1     | 40   | Static header (constant)                        |
-| 2     | 8    | Power on/off                                    |
-| 3     | 8    | Mode (Cool/Heat, Dry, Fan, Hold)                |
-| 4     | 8    | Temperature (`31 − value`, big-endian)          |
-| 5     | 8    | Fan speed / sleep / swing                       |
-| 6     | 24   | Unknown extra data                              |
-| 7     | 8    | Unit (°C / °F)                                  |
-| 8     | 8    | Checksum (algorithm not confirmed)              |
+| Byte  | Field       | Notes                                          |
+| :---: | ----------- | ---------------------------------------------- |
+| 0–4   | Header      | Constant `23 CB 26 01 00`                      |
+| 5     | Power       | `24` on / `20` off                             |
+| 6     | Mode        | `1` Heat · `2` Dry · `3` Cool · `7` Fan · `8` Hold |
+| 7     | Temperature | `base − T` (base 31, or 26 in Heat)            |
+| 8     | Fan / Swing | `&0x07` speed, `&0x38` swing                   |
+| 9–10  | Timer (?)   | unused in capture                              |
+| 11    | 32 °C flag  | bit 0                                          |
+| 12    | Unit        | `00` °C / `C9` °F                              |
+| 13    | Checksum    | sum of bytes 0–12                              |
 
-Full field-by-field breakdown and the decoded sample table live in
-[`docs/protocol.md`](docs/protocol.md).
+Full field-by-field breakdown, verified examples and the corrections to the
+original analysis live in [`docs/protocol.md`](docs/protocol.md).
 
 ## Repository layout
 
@@ -43,53 +47,58 @@ Full field-by-field breakdown and the decoded sample table live in
 .
 ├── README.md              # this file — project overview
 ├── docs/
-│   ├── protocol.md        # full frame format + decoded capture table
-│   └── checksum.md        # checksum algorithm analysis (unconfirmed)
+│   └── protocol.md        # verified frame format + decoding
 ├── tools/
-│   └── checksum.js        # brute-forcer for the checksum constant
+│   ├── decode.py          # decodes a .sr capture → frames + checksum check
+│   └── encode.py          # builds a transmittable IR frame from settings
 └── captures/
-    ├── full-pulseview.sr  # raw sigrok logic-analyzer capture
+    ├── full-pulseview.sr  # raw sigrok logic-analyzer capture (8 MHz, D0)
     ├── full-pulseview.pvs # PulseView session file
-    ├── decoded-bits.txt   # captured frames decoded to raw bit strings
     ├── sample-1.png       # screenshot of a captured waveform
     └── sample-2.png       # screenshot of a captured waveform
 ```
 
-## How the data was captured
+## Decoding the capture
 
 The IR signal was demodulated with an IR receiver and recorded with a
-[sigrok](https://sigrok.org/) logic analyzer, then inspected in
-[PulseView](https://sigrok.org/wiki/PulseView).
+[sigrok](https://sigrok.org/) logic analyzer (8 MHz, channel D0), then
+inspected in [PulseView](https://sigrok.org/wiki/PulseView).
 
-To open the raw capture:
+Decode it into frames and verify every checksum (needs Python + numpy):
+
+```bash
+python3 tools/decode.py            # decoded settings, one line per frame
+python3 tools/decode.py --bits     # also dump the raw 112-bit frames
+```
+
+To open the raw capture in a GUI instead:
 
 ```bash
 pulseview captures/full-pulseview.sr
 ```
 
-`captures/decoded-bits.txt` contains the resulting frames as raw bit
-strings (one per line), which are the input for the decoding work in
-`docs/`.
+## Sending commands
 
-## Tools
-
-Run the checksum brute-forcer (requires Node.js):
+`tools/encode.py` builds a frame from settings and prints the bytes, the
+112-bit stream and a raw pulse-timing list (µs, mark/space) ready for an IR
+transmitter such as an ESP32 + IR LED (e.g. IRremoteESP8266 `sendRaw`, ~38 kHz
+carrier):
 
 ```bash
-node tools/checksum.js
+python3 tools/encode.py --mode cool --temp 22 --fan auto
+python3 tools/encode.py --mode heat --temp 18 --fan high --swing --unit f
+python3 tools/encode.py --power off
+python3 tools/encode.py --selftest   # verifies output against real captures
 ```
 
-It tries every additive constant `0x00..0xFF` against the captured packets
-and reports which constants reproduce the observed checksums.
+## Remaining unknowns
 
-## Open questions
+- **Timer (bytes 9–10):** never exercised in the capture; encoding unverified.
+- **Swing (`byte8 & 0x38`):** always `0x38` when on — whether the three bits
+  encode swing range/direction is untested.
+- **Auto mode** and any other unpressed buttons are undocumented.
 
-- **Block 8 (checksum):** the modelled algorithm (mirror bits → sum →
-  add constant → mirror) does not validate across all captures. See
-  [`docs/checksum.md`](docs/checksum.md).
-- **Block 6:** purpose of these 24 bits is unknown; one bit appears to
-  toggle at 32 °C.
-- **Bit/byte ordering** of the frame is not fully confirmed.
+See [`docs/protocol.md`](docs/protocol.md#remaining-unknowns) for details.
 
 ## Disclaimer
 

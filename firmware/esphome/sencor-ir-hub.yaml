@@ -1,11 +1,12 @@
-# Sencor MT9020C — ESPHome IR hub (starter)
+# Sencor MT9020C — ESPHome IR hub
 #
 # Hardware: ../HARDWARE.md  (ESP32-S3, IR LED on GPIO4 via 2N7000, TSOP on GPIO5)
 # Protocol: ../../docs/protocol.md  (LSB-first 14-byte frame, checksum = sum mod 256)
 #
-# Exposes mode / temperature / fan / swing / power to Home Assistant; each change
-# rebuilds the full frame and transmits it (the frame is a complete state snapshot).
-# The receiver logs incoming frames (dump: raw) — handy for learning other remotes.
+# The AC is exposed to Home Assistant as a single thermostat card by the local
+# `sencor_mt9020c` custom component (components/sencor_mt9020c/). The component
+# wraps a vendor-neutral C++ protocol core (sencor_protocol.*) in a climate_ir
+# adapter — no frame logic lives in this YAML.
 #
 # Setup:
 #   1. Put credentials in secrets.yaml next to this file (see README.md).
@@ -44,12 +45,22 @@ wifi:
 
 captive_portal:
 
+# ---------------------------------------------------------------- Custom component
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [sencor_mt9020c]
+
 # ---------------------------------------------------------------- IR hardware
 remote_transmitter:
   id: tx
   pin: ${tx_pin}
   carrier_duty_percent: 50%
+  non_blocking: true      # explicit (default since 2025.11); async TX is fine here
 
+# TX-only for control; the receiver is a standalone helper for learning other
+# remotes (its frames are logged, not fed into the climate component yet).
 remote_receiver:
   id: rx
   pin:
@@ -63,123 +74,9 @@ remote_receiver:
   filter: 100us           # glitch filter (noisy TSOP — see project history)
   idle: 6ms
 
-# ---------------------------------------------------------------- State
-globals:
-  - { id: g_power,   type: bool, restore_value: true, initial_value: 'true'  }
-  - { id: g_mode,    type: int,  restore_value: true, initial_value: '3'     }  # cool
-  - { id: g_temp,    type: int,  restore_value: true, initial_value: '22'    }
-  - { id: g_fan,     type: int,  restore_value: true, initial_value: '0'     }  # auto
-  - { id: g_swing,   type: bool, restore_value: true, initial_value: 'false' }
-  - { id: g_unit_f,  type: bool, restore_value: true, initial_value: 'false' }
-  - { id: g_carrier, type: int,  restore_value: true, initial_value: '38000' }
-
-# ---------------------------------------------------------------- Frame + send
-script:
-  - id: send_frame
-    then:
-      - lambda: |-
-          // Build the 14-byte frame (port of tools/encode.py / firmware buildFrame).
-          uint8_t b[14] = {0x23,0xCB,0x26,0x01,0x00, 0,0,0,0,0,0,0,0,0};
-          b[5] = 0x20 | (id(g_power) ? 0x04 : 0x00);            // power, bit 2
-          b[6] = id(g_mode);                                    // mode enum
-          int base = (id(g_mode) == 0x01) ? 26 : 31;            // heat=0x01
-          int t = id(g_temp);
-          if (id(g_mode) == 0x01) t = t < 13 ? 13 : (t > 26 ? 26 : t);
-          else                    t = t < 16 ? 16 : (t > 32 ? 32 : t);
-          bool f32 = (id(g_mode) != 0x01 && t >= 32);
-          b[7]  = f32 ? 0 : (uint8_t)((base - t) & 0xFF);
-          b[11] = f32 ? 0x01 : 0x00;                            // 32 C flag
-          b[8]  = id(g_fan) | (id(g_swing) ? 0x38 : 0x00);      // fan + swing
-          b[12] = id(g_unit_f) ? 0xC9 : 0x00;                   // unit (display)
-          uint16_t sum = 0; for (int i = 0; i < 13; i++) sum += b[i];
-          b[13] = sum & 0xFF;                                   // checksum
-
-          // Raw PDM timings (LSB-first); the 38 kHz carrier is added in hardware.
-          auto call = id(tx).transmit();
-          auto *d = call.get_data();
-          d->set_carrier_frequency(id(g_carrier));
-          d->reserve(2 + 112 * 2 + 1);
-          d->mark(3150); d->space(1575);                        // leader
-          for (int i = 0; i < 14; i++)
-            for (int j = 0; j < 8; j++) {                       // bit 0 first
-              d->mark(500);
-              d->space(((b[i] >> j) & 1) ? 1160 : 345);
-            }
-          d->mark(500);                                         // stop mark
-          call.perform();
-
-          ESP_LOGI("sencor", "TX %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                   b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13]);
-
-# ---------------------------------------------------------------- HA controls
-select:
-  - platform: template
-    name: Mode
-    optimistic: true
-    options: [cool, heat, dry, fan, hold]
-    initial_option: cool
-    set_action:
-      - lambda: |-
-          id(g_mode) = (x == "heat") ? 1 : (x == "dry") ? 2 : (x == "fan") ? 7
-                     : (x == "hold") ? 8 : 3;
-      - script.execute: send_frame
-  - platform: template
-    name: Fan
-    optimistic: true
-    options: [auto, sleep, low, med, high]
-    initial_option: auto
-    set_action:
-      - lambda: |-
-          id(g_fan) = (x == "sleep") ? 1 : (x == "low") ? 2 : (x == "med") ? 3
-                    : (x == "high") ? 5 : 0;
-      - script.execute: send_frame
-
-number:
-  - platform: template
-    name: Temperature
-    unit_of_measurement: "°C"
-    min_value: 16
-    max_value: 32
-    step: 1
-    initial_value: 22
-    optimistic: true
-    set_action:
-      - lambda: 'id(g_temp) = (int) x;'
-      - script.execute: send_frame
-  - platform: template
-    name: Carrier
-    unit_of_measurement: kHz
-    min_value: 34
-    max_value: 42
-    step: 1
-    initial_value: 38
-    optimistic: true
-    entity_category: config
-    set_action:
-      - lambda: 'id(g_carrier) = (int)(x * 1000);'
-
-switch:
-  - platform: template
-    name: Power
-    optimistic: true
-    turn_on:
-      - lambda: 'id(g_power) = true;'
-      - script.execute: send_frame
-    turn_off:
-      - lambda: 'id(g_power) = false;'
-      - script.execute: send_frame
-  - platform: template
-    name: Swing
-    optimistic: true
-    turn_on:
-      - lambda: 'id(g_swing) = true;'
-      - script.execute: send_frame
-    turn_off:
-      - lambda: 'id(g_swing) = false;'
-      - script.execute: send_frame
-
-button:
-  - platform: template
-    name: Resend
-    on_press:
-      - script.execute: send_frame
+# ---------------------------------------------------------------- Climate entity
+climate:
+  - platform: sencor_mt9020c
+    name: "Sencor AC"
+    transmitter_id: tx
+    carrier_frequency: 38kHz   # tune 36–40 kHz here if the AC is unreliable

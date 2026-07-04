@@ -1,0 +1,82 @@
+# Sencor MT9020C — ESPHome IR hub
+#
+# Hardware: ../HARDWARE.md  (ESP32-S3, IR LED on GPIO4 via 2N7000, TSOP on GPIO5)
+# Protocol: ../../docs/protocol.md  (LSB-first 14-byte frame, checksum = sum mod 256)
+#
+# The AC is exposed to Home Assistant as a single thermostat card by the local
+# `sencor_mt9020c` custom component (components/sencor_mt9020c/). The component
+# wraps a vendor-neutral C++ protocol core (sencor_protocol.*) in a climate_ir
+# adapter — no frame logic lives in this YAML.
+#
+# Setup:
+#   1. Put credentials in secrets.yaml next to this file (see README.md).
+#   2. esphome run sencor-ir-hub.yaml
+
+substitutions:
+  name: sencor-ir-hub
+  friendly_name: Sencor IR Hub
+  tx_pin: GPIO4
+  rx_pin: GPIO5
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+  # N16R8: octal PSRAM is unused here (so GPIO35/36/37 stay off-limits, but no
+  # psram: block is needed). If the board won't boot, set flash mode to dio.
+
+logger:
+api:
+  encryption:
+    key: !secret api_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}          # fallback hotspot if WiFi fails
+
+captive_portal:
+
+# ---------------------------------------------------------------- Custom component
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [sencor_mt9020c]
+
+# ---------------------------------------------------------------- IR hardware
+remote_transmitter:
+  id: tx
+  pin: ${tx_pin}
+  carrier_duty_percent: 50%
+  non_blocking: true      # explicit (default since 2025.11); async TX is fine here
+
+# TX-only for control; the receiver is a standalone helper for learning other
+# remotes (its frames are logged, not fed into the climate component yet).
+remote_receiver:
+  id: rx
+  pin:
+    number: ${rx_pin}
+    inverted: true        # TSOP idles HIGH, pulls LOW on carrier
+    mode:
+      input: true
+      pullup: true
+  dump: raw               # log received frames to the ESPHome console
+  tolerance: 25%
+  filter: 100us           # glitch filter (noisy TSOP — see project history)
+  idle: 6ms
+
+# ---------------------------------------------------------------- Climate entity
+climate:
+  - platform: sencor_mt9020c
+    name: "Sencor AC"
+    transmitter_id: tx
+    carrier_frequency: 38kHz   # tune 36–40 kHz here if the AC is unreliable

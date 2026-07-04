@@ -22,6 +22,9 @@ firmware/
 
 ## Hardware
 
+For the full IR-hub build (ESP32-S3 + MOSFET-driven LEDs + TSOP, with a bill of
+materials and full wiring), see [`HARDWARE.md`](HARDWARE.md). Quick version below.
+
 ### TX — IR LED (required)
 Drive the LED through a transistor; a GPIO pin can't source the current an IR
 LED needs for usable range:
@@ -66,15 +69,24 @@ CLion** plugin, then open this `firmware/` folder.
 
 ```bash
 cd firmware
-pio run -t upload     # build + flash (default env: esp32c6)
+pio run -t upload     # build + flash (default env: esp32s3)
 pio device monitor    # serial @ 115200
 ```
 
-The default board is **esp32-c6-devkitc-1** (USB-C, native USB-Serial-JTAG — no
-manual bootloader, no brownout). It uses the [pioarduino](https://github.com/pioarduino/platform-espressif32)
-platform fork because the stock platform has no Arduino support for the C6. An
-`esp32dev` env (bare ESP-WROOM-32 + CP2102) is kept as a fallback — build it
-with `-e esp32dev`.
+The default board is **esp32-s3-devkitc-1** (the target IR-hub board — USB-C,
+native USB, 16 MB flash). It uses the [pioarduino](https://github.com/pioarduino/platform-espressif32)
+platform fork, which ships the Arduino core for every current chip. Two more envs
+are kept for the boards used during bring-up — build either with `-e <env>`:
+
+- **`esp32c6`** — ESP32-C6-DevKitC-1 (USB-Serial-JTAG, no brownout); the board the
+  protocol was validated on.
+- **`esp32dev`** — bare ESP-WROOM-32 + CP2102 (needs the manual bootloader dance).
+
+### Status LED
+
+Dev boards with an onboard addressable RGB LED (S3 `GPIO48`, C6 `GPIO8`) use it as
+a status indicator: **green** = WiFi connected, **red** = WiFi down, **blue blink**
+= frame transmitted. It compiles out on the bare WROOM (no such LED).
 
 ### Troubleshooting
 
